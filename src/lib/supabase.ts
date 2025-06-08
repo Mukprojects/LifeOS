@@ -110,40 +110,63 @@ export async function enhanceGoalStructure(goals: Goal[]): Promise<Goal[]> {
   });
 }
 
-// Add a function to initialize the enhanced goal structure
-
 // Resources functions
 export const getResourcesData = async (userId: string): Promise<ResourcesData | null> => {
-  const { data, error } = await supabase
-    .from('resources')
-    .select('resources_data')
-    .eq('user_id', userId)
-    .maybeSingle();
+  try {
+    const { data, error } = await supabase
+      .from('resources')
+      .select('resources_data')
+      .eq('user_id', userId)
+      .maybeSingle();
 
-  if (error) {
-    console.error('Error fetching resources data:', error);
+    if (error) {
+      console.error('Error fetching resources data:', error);
+      return null;
+    }
+
+    return data?.resources_data as ResourcesData || null;
+  } catch (error) {
+    console.error('Error in getResourcesData:', error);
     return null;
   }
-
-  return data?.resources_data as ResourcesData || null;
 };
 
 export const generateBookRecommendations = async (userId: string): Promise<ResourcesData | null> => {
   try {
-    // Try to call the edge function
-    try {
-      const { data, error } = await supabase.functions.invoke('ai-book-recommendations', {
-        body: { userId },
-      });
-
-      if (!error && data) return data as ResourcesData;
-    } catch (e) {
-      console.error('Edge function error:', e);
-      // Continue to fallback if edge function fails
+    console.log('Generating book recommendations for user:', userId);
+    
+    // Get the current session to ensure we're authenticated
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError || !session) {
+      console.error('User not authenticated for book recommendations');
+      throw new Error('User not authenticated');
     }
+
+    // Try to call the edge function
+    const { data, error } = await supabase.functions.invoke('ai-book-recommendations', {
+      body: { userId },
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      }
+    });
+
+    if (error) {
+      console.error('Edge function error:', error);
+      throw error;
+    }
+
+    if (data) {
+      console.log('Successfully generated book recommendations');
+      return data as ResourcesData;
+    }
+
+    throw new Error('No data returned from edge function');
+  } catch (error) {
+    console.error('Error generating book recommendations:', error);
     
     // Fallback with mock data if edge function fails
-    console.log('Using mock book recommendations data');
+    console.log('Using fallback mock book recommendations data');
     const mockData: ResourcesData = {
       books: [
         {
@@ -153,7 +176,7 @@ export const generateBookRecommendations = async (userId: string): Promise<Resou
           description: "This book provides practical strategies for building good habits and breaking bad ones, emphasizing that small, consistent changes can lead to significant improvements in daily life and long-term goals.",
           amazonUrl: "https://www.amazon.com/Atomic-Habits-Proven-Build-Break/dp/0735211299",
           category: "Personal Growth",
-          relevantGoals: ["Avoiding Procrastination", "Building Study Routines"],
+          relevantGoals: ["Building Better Habits", "Improve Productivity"],
           tags: ["habits", "self-improvement", "productivity"],
           rating: 4.5
         },
@@ -186,7 +209,7 @@ export const generateBookRecommendations = async (userId: string): Promise<Resou
           description: "A comprehensive guide to preparing for technical interviews at top companies like Google, covering coding challenges, system design, and behavioral questions to build confidence and skills for the application process.",
           amazonUrl: "https://www.amazon.com/Cracking-Coding-Interview-Programming-Questions/dp/0984782850/",
           category: "Career Development",
-          relevantGoals: ["Intern At Google", "Improve Coding Skills"],
+          relevantGoals: ["Career Advancement", "Technical Skills"],
           tags: ["interviews", "coding", "algorithms"],
           rating: 4.5
         },
@@ -202,23 +225,29 @@ export const generateBookRecommendations = async (userId: string): Promise<Resou
           rating: 4.6
         }
       ],
-      personalizedNote: "Based on your goal to secure a Google internship, I've selected these books to help you prepare for interviews, build productive habits, improve focus, and enhance motivation. These resources target your challenges with procrastination, low focus, and mental health, providing practical strategies for application tasks, study efficiency, and networking, while leveraging your existing strengths in studying to maximize your internship chances.",
+      personalizedNote: "Based on your goals and profile, I've selected these books to help you build better habits, improve productivity, enhance focus, and develop both personally and professionally. These resources target common challenges like procrastination and low motivation while providing practical strategies for achieving your objectives.",
       lastUpdated: new Date().toISOString()
     };
 
-    // Save mock data to database
-    const { error } = await supabase
-      .from('resources')
-      .upsert({ 
-        user_id: userId,
-        resources_data: mockData
-      });
+    // Try to save mock data to database
+    try {
+      const { error: saveError } = await supabase
+        .from('resources')
+        .upsert({ 
+          user_id: userId,
+          resources_data: mockData,
+          updated_at: new Date().toISOString()
+        });
 
-    if (error) throw error;
+      if (saveError) {
+        console.error('Error saving fallback data:', saveError);
+      } else {
+        console.log('Successfully saved fallback book recommendations');
+      }
+    } catch (saveError) {
+      console.error('Error saving fallback data:', saveError);
+    }
     
     return mockData;
-  } catch (error) {
-    console.error('Error generating book recommendations:', error);
-    return null;
   }
 };
